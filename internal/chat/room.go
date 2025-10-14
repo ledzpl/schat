@@ -2,33 +2,10 @@ package chat
 
 import (
 	"fmt"
-	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
 )
-
-// Client represents a connected participant in the chat room.
-type Client struct {
-	ID       string
-	Username string
-	Color    string
-	send     chan string
-}
-
-// Send returns the outbound message channel for the client.
-func (c *Client) Send() <-chan string {
-	return c.send
-}
-
-// tryDeliver places a message onto the outbound channel without blocking.
-func (c *Client) tryDeliver(msg string) {
-	select {
-	case c.send <- msg:
-	default:
-		// Drop queued messages when the receiver is too slow; keeps the room responsive.
-	}
-}
 
 // Room manages the set of connected clients and message fan-out.
 type Room struct {
@@ -41,20 +18,7 @@ type Room struct {
 }
 
 const colorReset = "\033[0m"
-
-var defaultColorPalette = []string{
-	"\033[31m", // Red
-	"\033[32m", // Green
-	"\033[33m", // Yellow
-	"\033[34m", // Blue
-	"\033[35m", // Magenta
-	"\033[36m", // Cyan
-}
-
-// ColorPicker represents a strategy for choosing a display color for new clients.
-type ColorPicker interface {
-	Next() string
-}
+const timestampFormat = "2006-01-02 15:04:05"
 
 // RoomOption customises room construction.
 type RoomOption func(*Room)
@@ -109,12 +73,7 @@ func (r *Room) AddClient(username string) *Client {
 		username = id
 	}
 
-	client := &Client{
-		ID:       id,
-		Username: username,
-		Color:    r.nextColor(),
-		send:     make(chan string, 16),
-	}
+	client := newClient(id, username, r.nextColor())
 
 	r.mu.Lock()
 	r.clients[id] = client
@@ -191,32 +150,7 @@ func (r *Room) nextColor() string {
 
 func (r *Room) timestamp() string {
 	if r.clock == nil {
-		return time.Now().Format("2006-01-02 15:04:05")
+		return time.Now().Format(timestampFormat)
 	}
-	return r.clock().Format("2006-01-02 15:04:05")
-}
-
-type randomColorPicker struct {
-	mu      sync.Mutex
-	palette []string
-	rng     *rand.Rand
-}
-
-func newRandomColorPicker(palette []string) *randomColorPicker {
-	if len(palette) == 0 {
-		return nil
-	}
-	return &randomColorPicker{
-		palette: append([]string(nil), palette...),
-		rng:     rand.New(rand.NewSource(time.Now().UnixNano())),
-	}
-}
-
-func (p *randomColorPicker) Next() string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if len(p.palette) == 0 {
-		return ""
-	}
-	return p.palette[p.rng.Intn(len(p.palette))]
+	return r.clock().Format(timestampFormat)
 }

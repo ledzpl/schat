@@ -93,18 +93,20 @@ func (s *session) startRequestPump() {
 	s.requestsDone = make(chan struct{})
 
 	ready := make(chan struct{})
-	var once sync.Once
-	signalReady := func() { once.Do(func() { close(ready) }) }
 
 	go func() {
 		defer close(s.requestsDone)
+		shellReady := false
 		for req := range s.requests {
-			if s.handleRequest(req) {
-				signalReady()
+			if s.handleRequest(req) && !shellReady {
+				close(ready)
+				shellReady = true
 				continue
 			}
 		}
-		signalReady()
+		if !shellReady {
+			close(ready)
+		}
 	}()
 
 	<-ready
