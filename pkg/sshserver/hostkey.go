@@ -13,6 +13,8 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+const rsaKeyBits = 2048
+
 // LoadOrGenerateSigner loads an SSH signer from the provided path, generating a new RSA host key if none exists.
 func LoadOrGenerateSigner(path string) (ssh.Signer, error) {
 	if path == "" {
@@ -53,9 +55,9 @@ func loadSigner(path string) (ssh.Signer, error) {
 }
 
 func generateAndStoreSigner(path string) (ssh.Signer, error) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := generateRSAKey()
 	if err != nil {
-		return nil, fmt.Errorf("sshserver: generate host key: %w", err)
+		return nil, err
 	}
 
 	dir := filepath.Dir(path)
@@ -72,10 +74,30 @@ func generateAndStoreSigner(path string) (ssh.Signer, error) {
 		return nil, fmt.Errorf("sshserver: write host key %q: %w", path, err)
 	}
 
+	return signerFromKey(key)
+}
+
+// EphemeralSigner creates a temporary RSA host key for development environments.
+func EphemeralSigner() (ssh.Signer, error) {
+	key, err := generateRSAKey()
+	if err != nil {
+		return nil, err
+	}
+	return signerFromKey(key)
+}
+
+func generateRSAKey() (*rsa.PrivateKey, error) {
+	key, err := rsa.GenerateKey(rand.Reader, rsaKeyBits)
+	if err != nil {
+		return nil, fmt.Errorf("sshserver: generate host key: %w", err)
+	}
+	return key, nil
+}
+
+func signerFromKey(key *rsa.PrivateKey) (ssh.Signer, error) {
 	signer, err := ssh.NewSignerFromKey(key)
 	if err != nil {
 		return nil, fmt.Errorf("sshserver: create signer: %w", err)
 	}
-
 	return signer, nil
 }

@@ -2,8 +2,6 @@ package sshserver
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"errors"
 	"fmt"
 	"log"
@@ -120,19 +118,4 @@ func (s *Server) handleConn(ctx context.Context, tcpConn net.Conn, handler Sessi
 			go handler(sshConn, channel, requests)
 		}
 	}
-}
-
-// EphemeralSigner creates a temporary RSA host key for development environments.
-func EphemeralSigner() (ssh.Signer, error) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, fmt.Errorf("sshserver: generate host key: %w", err)
-	}
-
-	signer, err := ssh.NewSignerFromKey(key)
-	if err != nil {
-		return nil, fmt.Errorf("sshserver: create signer: %w", err)
-	}
-
-	return signer, nil
 }
