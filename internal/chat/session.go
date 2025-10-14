@@ -171,38 +171,33 @@ func (s *session) readLoop() error {
 
 // processRune handles interactive input keeping the buffer, screen, and control flow in sync.
 func (s *session) processRune(reader *bufio.Reader, r rune) error {
-	switch r {
-	case '\r', '\n':
-		return s.handleNewline(reader, r)
-	case ctrlC:
-		if err := s.handleControl("^C"); err != nil {
+	if label, terminate := terminationControlLabel(r); terminate {
+		if err := s.handleControl(label); err != nil {
 			return err
 		}
 		return errSessionTerminated
-	case ctrlD:
-		if err := s.handleControl("^D"); err != nil {
-			return err
-		}
-		return errSessionTerminated
-	case backspace, deleteChar:
+	}
+
+	if isEnterKey(r) {
+		return s.handleEnter(reader, r)
+	}
+
+	if isEraseKey(r) {
 		s.buffer.TrimLast()
 		return s.renderPrompt()
-	default:
-		if unicode.IsPrint(r) {
-			s.buffer.Append(r)
-			return s.renderPrompt()
-		}
-		return nil
 	}
+
+	if unicode.IsPrint(r) {
+		s.buffer.Append(r)
+		return s.renderPrompt()
+	}
+
+	return nil
 }
 
-func (s *session) handleNewline(reader *bufio.Reader, r rune) error {
-	if r == '\r' && reader.Buffered() > 0 {
-		if next, _, err := reader.ReadRune(); err == nil {
-			if next != '\n' {
-				_ = reader.UnreadRune()
-			}
-		}
+func (s *session) handleEnter(reader *bufio.Reader, r rune) error {
+	if r == '\r' {
+		discardPendingLineFeed(reader)
 	}
 	return s.submitLine()
 }
@@ -291,4 +286,38 @@ func (s *session) handleReadError(err error) {
 
 func (s *session) printSystemError(err error) {
 	_ = s.printMessage(fmt.Sprintf("[system] %v", err))
+}
+
+func terminationControlLabel(r rune) (string, bool) {
+	switch r {
+	case ctrlC:
+		return "^C", true
+	case ctrlD:
+		return "^D", true
+	default:
+		return "", false
+	}
+}
+
+func isEnterKey(r rune) bool {
+	return r == '\r' || r == '\n'
+}
+
+func isEraseKey(r rune) bool {
+	return r == backspace || r == deleteChar
+}
+
+func discardPendingLineFeed(reader *bufio.Reader) {
+	if reader.Buffered() == 0 {
+		return
+	}
+
+	next, _, err := reader.ReadRune()
+	if err != nil {
+		return
+	}
+
+	if next != '\n' {
+		_ = reader.UnreadRune()
+	}
 }
