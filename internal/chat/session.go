@@ -254,6 +254,9 @@ func (s *session) cleanupSession() {
 		if s.client != nil {
 			s.room.RemoveClient(s.client.ID)
 		}
+		if s.channel != nil {
+			_ = s.channel.Close()
+		}
 		s.workers.Wait()
 	})
 }
