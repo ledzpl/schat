@@ -60,6 +60,13 @@ func NewRoom() *Room {
 	}
 }
 
+// ClientCount returns the number of active clients in the room.
+func (r *Room) ClientCount() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.clients)
+}
+
 // AddClient registers a new client and returns it. The caller is responsible for
 // removing the client when the session ends.
 func (r *Room) AddClient(username string) *Client {

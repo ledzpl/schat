@@ -36,10 +36,9 @@ type session struct {
 	requests <-chan *ssh.Request
 
 	client *Client
+	buffer *lineBuffer
 	writer *sessionWriter
-
-	lineMu sync.RWMutex
-	line   []rune
+	ui     *terminalUI
 
 	outboundDone chan struct{}
 	cleanup      sync.Once
@@ -51,17 +50,22 @@ func newSession(room *Room, username string, channel ssh.Channel, requests <-cha
 		username: username,
 		channel:  channel,
 		requests: requests,
-		line:     make([]rune, 0, 128),
+		buffer:   newLineBuffer(128),
 	}
 }
 
 func (s *session) run() {
 	s.client = s.room.AddClient(s.username)
 	s.writer = newSessionWriter(s.channel)
+	s.ui = newTerminalUI(s.writer)
 	defer s.cleanupSession()
 
 	if err := s.waitForShell(); err != nil {
 		_ = s.printMessage(fmt.Sprintf("[system] failed to start shell: %v", err))
+		return
+	}
+
+	if err := s.ui.ClearScreen(); err != nil {
 		return
 	}
 
@@ -159,13 +163,13 @@ func (s *session) readLoop() error {
 			}
 			return errSessionTerminated
 		case backspace, deleteChar:
-			s.trimLastRune()
+			s.buffer.TrimLast()
 			if err := s.renderPrompt(); err != nil {
 				return err
 			}
 		default:
 			if unicode.IsPrint(r) {
-				s.appendRune(r)
+				s.buffer.Append(r)
 				if err := s.renderPrompt(); err != nil {
 					return err
 				}
@@ -175,7 +179,7 @@ func (s *session) readLoop() error {
 }
 
 func (s *session) submitLine() error {
-	text := s.drainLine()
+	text := s.buffer.Drain()
 	if strings.TrimSpace(text) == "" {
 		return s.renderPrompt()
 	}
@@ -183,12 +187,15 @@ func (s *session) submitLine() error {
 }
 
 func (s *session) handleEOF() error {
-	return s.broadcastLine(s.drainLine())
+	return s.broadcastLine(s.buffer.Drain())
 }
 
 func (s *session) handleControl(label string) error {
-	s.resetLine()
-	return s.writer.writeString(fmt.Sprintf("\r\033[K%s\r\n", label))
+	s.buffer.Reset()
+	if err := s.ui.DisplayControlAck(label); err != nil {
+		return err
+	}
+	return s.renderPrompt()
 }
 
 func (s *session) broadcastLine(text string) error {
@@ -201,63 +208,16 @@ func (s *session) broadcastLine(text string) error {
 }
 
 func (s *session) renderPrompt() error {
-	current := s.snapshotLine()
-
-	var b strings.Builder
-	b.Grow(4 + len(current))
-	b.WriteString("\r> ")
-	b.WriteString(current)
-	b.WriteString("\033[K")
-
-	return s.writer.writeString(b.String())
+	header := fmt.Sprintf("Users online: %d", s.room.ClientCount())
+	return s.ui.UpdatePrompt(header, s.buffer.Snapshot())
 }
 
 func (s *session) printMessage(msg string) error {
-	var b strings.Builder
-	b.Grow(4 + len(msg))
-	b.WriteString("\r\033[K")
-	b.WriteString(msg)
-	b.WriteString("\r\n")
-
-	if err := s.writer.writeString(b.String()); err != nil {
+	if err := s.ui.DisplayMessage(msg); err != nil {
 		return err
 	}
 
 	return s.renderPrompt()
-}
-
-func (s *session) appendRune(r rune) {
-	s.lineMu.Lock()
-	s.line = append(s.line, r)
-	s.lineMu.Unlock()
-}
-
-func (s *session) trimLastRune() {
-	s.lineMu.Lock()
-	if len(s.line) > 0 {
-		s.line = s.line[:len(s.line)-1]
-	}
-	s.lineMu.Unlock()
-}
-
-func (s *session) resetLine() {
-	s.lineMu.Lock()
-	s.line = s.line[:0]
-	s.lineMu.Unlock()
-}
-
-func (s *session) drainLine() string {
-	s.lineMu.Lock()
-	text := string(s.line)
-	s.line = s.line[:0]
-	s.lineMu.Unlock()
-	return text
-}
-
-func (s *session) snapshotLine() string {
-	s.lineMu.RLock()
-	defer s.lineMu.RUnlock()
-	return string(s.line)
 }
 
 func (s *session) cleanupSession() {
