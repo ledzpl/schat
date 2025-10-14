@@ -21,6 +21,9 @@ const (
 
 var errSessionTerminated = errors.New("session terminated")
 
+// errShellNotRequested indicates the SSH client closed the request stream without asking for a shell.
+var errShellNotRequested = errors.New("shell request not received before channel closed")
+
 // HandleSession wires an SSH channel to the chat room.
 func HandleSession(room *Room, conn *ssh.ServerConn, channel ssh.Channel, requests <-chan *ssh.Request) {
 	defer channel.Close()
@@ -40,9 +43,8 @@ type session struct {
 	writer *sessionWriter
 	ui     *terminalUI
 
-	outboundDone chan struct{}
-	requestsDone chan struct{}
-	cleanup      sync.Once
+	workers sync.WaitGroup
+	cleanup sync.Once
 }
 
 func newSession(room *Room, username string, channel ssh.Channel, requests <-chan *ssh.Request) *session {
@@ -59,6 +61,9 @@ func (s *session) run() {
 	defer s.cleanupSession()
 
 	if err := s.setup(); err != nil {
+		if errors.Is(err, errShellNotRequested) {
+			return
+		}
 		s.printSystemError(err)
 		return
 	}
@@ -69,17 +74,20 @@ func (s *session) run() {
 }
 
 func (s *session) setup() error {
-	s.client = s.room.AddClient(s.username)
 	s.writer = newSessionWriter(s.channel)
 	s.ui = newTerminalUI(s.writer)
 
-	s.startRequestPump()
+	if err := s.awaitShell(); err != nil {
+		return fmt.Errorf("await shell: %w", err)
+	}
+
+	s.client = s.room.AddClient(s.username)
 
 	if err := s.ui.ClearScreen(); err != nil {
 		return fmt.Errorf("prepare terminal: %w", err)
 	}
 
-	s.startOutboundPump()
+	s.launchOutboundRelay()
 
 	if err := s.sendGreeting(); err != nil {
 		return fmt.Errorf("send greeting: %w", err)
@@ -88,28 +96,28 @@ func (s *session) setup() error {
 	return nil
 }
 
-// startRequestPump drains SSH channel requests and blocks until the client requests a shell.
-func (s *session) startRequestPump() {
-	s.requestsDone = make(chan struct{})
+// awaitShell drains SSH channel requests and blocks until the client requests a shell.
+func (s *session) awaitShell() error {
+	result := make(chan error, 1)
 
-	ready := make(chan struct{})
-
+	s.workers.Add(1)
 	go func() {
-		defer close(s.requestsDone)
+		defer s.workers.Done()
+
 		shellReady := false
 		for req := range s.requests {
 			if s.handleRequest(req) && !shellReady {
-				close(ready)
 				shellReady = true
-				continue
+				result <- nil
 			}
 		}
+
 		if !shellReady {
-			close(ready)
+			result <- errShellNotRequested
 		}
 	}()
 
-	<-ready
+	return <-result
 }
 
 func (s *session) handleRequest(req *ssh.Request) bool {
@@ -125,11 +133,10 @@ func (s *session) handleRequest(req *ssh.Request) bool {
 	return false
 }
 
-func (s *session) startOutboundPump() {
-	s.outboundDone = make(chan struct{})
-
+func (s *session) launchOutboundRelay() {
+	s.workers.Add(1)
 	go func() {
-		defer close(s.outboundDone)
+		defer s.workers.Done()
 		for msg := range s.client.Send() {
 			if err := s.printMessage(msg); err != nil {
 				return
@@ -248,12 +255,7 @@ func (s *session) cleanupSession() {
 		if s.client != nil {
 			s.room.RemoveClient(s.client.ID)
 		}
-		if s.outboundDone != nil {
-			<-s.outboundDone
-		}
-		if s.requestsDone != nil {
-			<-s.requestsDone
-		}
+		s.workers.Wait()
 	})
 }
 
