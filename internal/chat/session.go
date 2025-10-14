@@ -87,7 +87,7 @@ func (s *session) setup() error {
 		return fmt.Errorf("prepare terminal: %w", err)
 	}
 
-	s.launchOutboundRelay()
+	s.startOutboundRelay()
 
 	if err := s.sendGreeting(); err != nil {
 		return fmt.Errorf("send greeting: %w", err)
@@ -98,26 +98,15 @@ func (s *session) setup() error {
 
 // awaitShell drains SSH channel requests and blocks until the client requests a shell.
 func (s *session) awaitShell() error {
-	result := make(chan error, 1)
-
-	s.workers.Add(1)
-	go func() {
-		defer s.workers.Done()
-
-		shellReady := false
-		for req := range s.requests {
-			if s.handleRequest(req) && !shellReady {
-				shellReady = true
-				result <- nil
-			}
+	for req := range s.requests {
+		if !s.handleRequest(req) {
+			continue
 		}
 
-		if !shellReady {
-			result <- errShellNotRequested
-		}
-	}()
-
-	return <-result
+		s.startRequestPump()
+		return nil
+	}
+	return errShellNotRequested
 }
 
 func (s *session) handleRequest(req *ssh.Request) bool {
@@ -133,7 +122,17 @@ func (s *session) handleRequest(req *ssh.Request) bool {
 	return false
 }
 
-func (s *session) launchOutboundRelay() {
+func (s *session) startRequestPump() {
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		for req := range s.requests {
+			s.handleRequest(req)
+		}
+	}()
+}
+
+func (s *session) startOutboundRelay() {
 	s.workers.Add(1)
 	go func() {
 		defer s.workers.Done()
