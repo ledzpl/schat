@@ -19,15 +19,11 @@ const (
 	deleteChar = 0x7f
 )
 
-var errSessionTerminated = errors.New("session terminated")
-
 // errShellNotRequested indicates the SSH client closed the request stream without asking for a shell.
 var errShellNotRequested = errors.New("shell request not received before channel closed")
 
 // HandleSession wires an SSH channel to the chat room.
 func HandleSession(room *Room, conn *ssh.ServerConn, channel ssh.Channel, requests <-chan *ssh.Request) {
-	defer channel.Close()
-
 	newSession(room, conn.User(), channel, requests).run()
 }
 
@@ -163,36 +159,38 @@ func (s *session) readLoop() error {
 			return err
 		}
 
-		if err := s.processRune(reader, r); err != nil {
+		terminate, err := s.processRune(reader, r)
+		if err != nil {
 			return err
+		}
+		if terminate {
+			return nil
 		}
 	}
 }
 
 // processRune handles interactive input keeping the buffer, screen, and control flow in sync.
-func (s *session) processRune(reader *bufio.Reader, r rune) error {
+// It returns true when the caller should end the read loop.
+func (s *session) processRune(reader *bufio.Reader, r rune) (bool, error) {
 	if label, terminate := terminationControlLabel(r); terminate {
 		if err := s.handleControl(label); err != nil {
-			return err
+			return true, err
 		}
-		return errSessionTerminated
+		return true, nil
 	}
 
-	if isEnterKey(r) {
-		return s.handleEnter(reader, r)
-	}
-
-	if isEraseKey(r) {
+	switch {
+	case isEnterKey(r):
+		return false, s.handleEnter(reader, r)
+	case isEraseKey(r):
 		s.buffer.TrimLast()
-		return s.renderPrompt()
-	}
-
-	if unicode.IsPrint(r) {
+		return false, s.renderPrompt()
+	case unicode.IsPrint(r):
 		s.buffer.Append(r)
-		return s.renderPrompt()
+		return false, s.renderPrompt()
 	}
 
-	return nil
+	return false, nil
 }
 
 func (s *session) handleEnter(reader *bufio.Reader, r rune) error {
@@ -275,8 +273,6 @@ func (w *sessionWriter) writeString(s string) error {
 
 func (s *session) handleReadError(err error) {
 	switch {
-	case errors.Is(err, errSessionTerminated):
-		return
 	case errors.Is(err, io.EOF):
 		return
 	default:
