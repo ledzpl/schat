@@ -1,63 +1,123 @@
 # schat
 
-`schat`은 SSH 세션을 통해 접속하는 경량 채팅 서버입니다. 누구나 SSH 클라이언트만 있으면 별도의 설치 없이 바로 접속해 실시간으로 대화를 나눌 수 있도록 설계되었습니다.
+`schat`은 SSH 세션으로 접속하는 실시간 채팅 서버입니다. SSH 클라이언트만 있으면 추가 설치 없이 채팅에 참여할 수 있도록 최소 의존성으로 설계되었습니다.
 
 ## 주요 기능
-- SSH 프로토콜을 이용한 텍스트 기반 채팅 서버
-- 다수의 동시 접속자를 지원하는 브로드캐스트 메시징
-- 사용자 식별을 돕는 ANSI 색상 닉네임 및 시스템 알림
-- 서버 시작 시 호스트 키 자동 생성(기존 키가 없을 때)
-- SIGINT/SIGTERM 신호 처리로 부드러운 종료 지원
+- SSH 프로토콜 기반 단일 바이너리: 별도 포트 포워딩이나 브라우저 없이 `ssh` 명령만으로 접속할 수 있습니다.
+- 실시간 브로드캐스트: 다수의 동시 접속자에게 타임스탬프와 ANSI 색상이 포함된 메시지를 전달합니다.
+- 터미널 친화 UI: 접속자 수 상태 표시, 입력 줄 버퍼, 백스페이스 및 `Ctrl+C`/`Ctrl+D` 같은 제어 키를 지원합니다.
+- 자동 호스트 키 관리: 지정 경로에 RSA 호스트 키가 없으면 안전한 권한으로 새 키를 생성합니다.
+- 우아한 종료: `SIGINT`/`SIGTERM`을 처리해 세션을 정리한 뒤 안전하게 종료합니다.
 
-## 요구 사항
+## 필요 조건
 - Go 1.21 이상
-- SSH 클라이언트(예: `ssh`, `PuTTY`, `Termius`)
+- SSH 클라이언트(`ssh`, `PuTTY`, `Termius` 등)
+- (선택) 정적 분석을 위한 `golangci-lint`
 
-## 빠른 시작
+## 빠르게 시작하기
 ```bash
 git clone https://github.com/ledzpl/schat.git
 cd schat
 go run ./cmd/schat --addr :2222 --host-key configs/ssh_host_rsa
 ```
 
-호스트 키 파일이 존재하지 않으면 서버가 자동으로 RSA 키를 생성합니다.
-(코드의 호스트 키를 직접 가져다 사용하지 마세요!) - 개발용 dummy 일 뿐입니다,.
+- `--addr`: SSH 서버가 바인딩할 TCP 주소 (기본값 `:2222`)
+- `--host-key`: SSH 호스트 프라이빗 키 경로. 파일이 없으면 2048비트 RSA 키를 생성하고 `0600` 권한으로 저장합니다. 개발 중 임시 키를 쓰고 싶다면 빈 문자열을 넘겨 `--host-key ""`처럼 실행하세요.
 
-### 클라이언트 접속
-서버가 실행 중인 호스트에서 다음과 같이 접속할 수 있습니다.
-
+### 실행 바이너리 빌드
 ```bash
-ssh -p 2222 <사용자명>@localhost
+go build -o bin/schat ./cmd/schat
+```
+생성된 바이너리를 통해 동일한 옵션으로 서버를 실행할 수 있습니다.
+
+### SSH 클라이언트에서 접속
+```bash
+ssh -p 2222 <닉네임>@localhost
+```
+- SSH 사용자명은 채팅 닉네임으로 사용됩니다. 비워두면 `user-###` 형식의 기본 닉네임이 할당됩니다.
+- 메시지를 입력하고 Enter를 누르면 전송되며, `Ctrl+D`로 세션을 종료할 수 있습니다. `Ctrl+C`는 현재 입력 줄을 비우고 안내 메시지를 출력합니다.
+
+## 프로젝트 구조
+```
+cmd/schat/main.go    # 실행 엔트리포인트 및 서버 부팅 로직
+internal/chat/       # 세션, 채팅방, 터미널 UI 등 대화 도메인 로직
+pkg/sshserver/       # SSH 리스너, 호스트 키 로딩/생성 유틸리티
+configs/ssh_host_rsa # 개발용 호스트 키 예시(운영 환경에서는 새 키를 생성하세요)
 ```
 
-- 비밀번호 없이 접속이 허용되며, 입력한 사용자명이 채팅 닉네임으로 사용됩니다.
-- 메시지는 입력 후 Enter를 누르면 전송되며, `Ctrl+D`로 세션을 종료할 수 있습니다.
-
-## 실행 옵션
-| 옵션 | 기본값 | 설명 |
-|------|--------|------|
-| `--addr` | `:2222` | SSH 서버가 바인딩할 TCP 주소 |
-| `--host-key` | `configs/ssh_host_rsa` | SSH 호스트 프라이빗 키 경로 (없으면 자동 생성) |
-
-## 빌드 & 테스트
-- 빌드: `go build ./cmd/schat`
+## 개발 가이드
+- 의존성 정리: `go mod tidy`
+- 빌드 확인: `go build ./cmd/schat`
 - 단위 테스트: `go test ./...`
 - 데이터 레이스 검출: `go test -race ./...`
-- 정적 분석(설치되어 있다면): `golangci-lint run`
+- 정적 분석: `golangci-lint run`
+- 커밋 전에는 `gofmt`와 `goimports`를 적용하고, 메시지는 Conventional Commits 형식을 사용합니다.
 
-## 디렉터리 구조
+## 테스트
+핵심 채팅 동작에 대한 단위 테스트는 `internal/chat` 패키지에 위치합니다. 새 동작을 추가할 때는 테이블 기반 테스트와 필요한 픽스처를 `testdata/`에 추가해 주세요.
+
+## 라이선스
+이 프로젝트는 MIT 라이선스 하에 배포됩니다. 자세한 내용은 `LICENSE` 파일을 참고하세요.
+
+---
+
+# schat (English)
+
+`schat` is a real-time chat server reachable over SSH sessions. With only an SSH client, contributors can join a shared conversation without installing extra tools.
+
+## Key Features
+- Single binary over SSH: join the chat with the `ssh` command—no browser or additional forwarding required.
+- Real-time broadcasting: distributes timestamped messages with ANSI color tags to every connected participant.
+- Terminal-friendly UI: shows online user counts, maintains an input buffer, and respects backspace plus controls like `Ctrl+C`/`Ctrl+D`.
+- Automatic host-key management: generates a new RSA host key at the configured path when missing, storing it with safe permissions.
+- Graceful shutdown: traps `SIGINT`/`SIGTERM`, cleans up sessions, and stops the server without dropping state abruptly.
+
+## Requirements
+- Go 1.21 or later
+- SSH client (`ssh`, `PuTTY`, `Termius`, etc.)
+- (Optional) `golangci-lint` for static analysis
+
+## Quick Start
+```bash
+git clone https://github.com/ledzpl/schat.git
+cd schat
+go run ./cmd/schat --addr :2222 --host-key configs/ssh_host_rsa
 ```
-cmd/schat          # 실행 엔트리포인트
-internal/chat      # 채팅 룸 및 SSH 세션 처리 로직
-pkg/sshserver      # SSH 서버 래퍼 및 호스트 키 유틸리티
-configs/           # 호스트 키 및 설정 예시
-docs/              # 설계 문서 및 런북(필요 시)
-testdata/          # 테스트용 고정 데이터
+
+- `--addr`: TCP address the SSH server binds to (default `:2222`)
+- `--host-key`: path to the SSH host private key. When the file is absent, a 2048-bit RSA key is generated and stored with `0600` permissions. Pass an empty string like `--host-key ""` to use an ephemeral key during development.
+
+### Build the Binary
+```bash
+go build -o bin/schat ./cmd/schat
+```
+Launch the produced binary with the same flags to run the server.
+
+### Connect from an SSH Client
+```bash
+ssh -p 2222 <nickname>@localhost
+```
+- The SSH username becomes the chat nickname. When left blank, the server assigns a default `user-###` label.
+- Type a message and press Enter to send. Use `Ctrl+D` to exit; `Ctrl+C` clears the current input line and prints a hint.
+
+## Project Layout
+```
+cmd/schat/main.go    # Application entrypoint and server bootstrap logic
+internal/chat/       # Session flow, chat room management, terminal UI
+pkg/sshserver/       # SSH listener wrapper plus host-key utilities
+configs/ssh_host_rsa # Example host key (generate a new one for production)
 ```
 
-## 기여 가이드
-1. 변경 사항에 대해 `go test ./...`와 필요 시 `go test -race ./...`를 실행해 주세요.
-2. 코드 스타일은 `gofmt` 및 `goimports`를 따라야 합니다.
-3. 커밋 메시지는 [Conventional Commits](https://www.conventionalcommits.org/) 규칙을 사용합니다.
+## Developer Guide
+- Manage dependencies: `go mod tidy`
+- Verify builds: `go build ./cmd/schat`
+- Run unit tests: `go test ./...`
+- Detect data races: `go test -race ./...`
+- Perform static checks: `golangci-lint run`
+- Format with `gofmt`/`goimports` and follow Conventional Commits for messages.
 
-이 프로젝트에 대한 제안이나 이슈는 자유롭게 등록해 주세요. SSH 기반 채팅 경험을 더 나아지게 만들기 위한 모든 피드백을 환영합니다.
+## Testing
+Unit tests for core chat behavior live in `internal/chat`. When adding features, prefer table-driven cases and store any required fixtures under `testdata/`.
+
+## License
+Distributed under the MIT License. Refer to the `LICENSE` file for the full text.
