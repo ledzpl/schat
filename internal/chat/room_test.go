@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"math/rand"
 	"testing"
 	"time"
 
@@ -11,11 +10,7 @@ import (
 func TestRoomBroadcastDeliversToOtherClients(t *testing.T) {
 	t.Helper()
 
-	rngMu.Lock()
-	rng = rand.New(rand.NewSource(1))
-	rngMu.Unlock()
-
-	room := NewRoom()
+	room := NewRoom(WithColorPicker(&staticColorPicker{}))
 
 	alice := room.AddClient("alice")
 	drainChannel(alice.Send())
@@ -43,7 +38,7 @@ func TestRoomBroadcastDeliversToOtherClients(t *testing.T) {
 }
 
 func TestRoomRemoveClientClosesChannel(t *testing.T) {
-	room := NewRoom()
+	room := NewRoom(WithColorPicker(&staticColorPicker{}))
 	client := room.AddClient("carol")
 	drainChannel(client.Send())
 
@@ -65,4 +60,12 @@ func drainChannel(ch <-chan string) {
 			return
 		}
 	}
+}
+
+type staticColorPicker struct {
+	color string
+}
+
+func (p *staticColorPicker) Next() string {
+	return p.color
 }

@@ -55,31 +55,42 @@ func newSession(room *Room, username string, channel ssh.Channel, requests <-cha
 }
 
 func (s *session) run() {
+	defer s.cleanupSession()
+
 	s.client = s.room.AddClient(s.username)
 	s.writer = newSessionWriter(s.channel)
 	s.ui = newTerminalUI(s.writer)
-	defer s.cleanupSession()
 
-	if err := s.waitForShell(); err != nil {
-		_ = s.printMessage(fmt.Sprintf("[system] failed to start shell: %v", err))
+	if err := s.prepare(); err != nil {
+		s.printSystemError(err)
 		return
 	}
 
-	if err := s.ui.ClearScreen(); err != nil {
-		return
+	if err := s.readLoop(); err != nil {
+		s.handleReadError(err)
+	}
+}
+
+func (s *session) prepare() error {
+	if err := s.initializeShell(); err != nil {
+		return fmt.Errorf("failed to start shell: %w", err)
 	}
 
 	s.startOutboundPump()
 
 	if err := s.sendGreeting(); err != nil {
-		return
+		return fmt.Errorf("failed to send greeting: %w", err)
 	}
 
-	if err := s.readLoop(); err != nil && !errors.Is(err, errSessionTerminated) {
-		if !errors.Is(err, io.EOF) {
-			_ = s.printMessage(fmt.Sprintf("[system] read error: %v", err))
-		}
+	return nil
+}
+
+func (s *session) initializeShell() error {
+	if err := s.waitForShell(); err != nil {
+		return err
 	}
+
+	return s.ui.ClearScreen()
 }
 
 func (s *session) waitForShell() error {
@@ -246,4 +257,19 @@ func (w *sessionWriter) writeString(s string) error {
 
 	_, err := io.WriteString(w.ch, s)
 	return err
+}
+
+func (s *session) handleReadError(err error) {
+	switch {
+	case errors.Is(err, errSessionTerminated):
+		return
+	case errors.Is(err, io.EOF):
+		return
+	default:
+		s.printSystemError(fmt.Errorf("read error: %w", err))
+	}
+}
+
+func (s *session) printSystemError(err error) {
+	_ = s.printMessage(fmt.Sprintf("[system] %v", err))
 }
