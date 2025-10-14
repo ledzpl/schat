@@ -34,7 +34,7 @@ go build -o bin/schat ./cmd/schat
 ```bash
 ssh -p 2222 <닉네임>@localhost
 ```
-- SSH 사용자명은 채팅 닉네임으로 사용됩니다. 비워두면 `user-###` 형식의 기본 닉네임이 할당됩니다.
+- SSH 사용자명은 채팅 닉네임으로 사용됩니다.
 - 메시지를 입력하고 Enter를 누르면 전송되며, `Ctrl+D`로 세션을 종료할 수 있습니다. `Ctrl+C`는 현재 입력 줄을 비우고 안내 메시지를 출력합니다.
 
 ## 프로젝트 구조
@@ -97,7 +97,7 @@ Launch the produced binary with the same flags to run the server.
 ```bash
 ssh -p 2222 <nickname>@localhost
 ```
-- The SSH username becomes the chat nickname. When left blank, the server assigns a default `user-###` label.
+- The SSH username becomes the chat nickname.
 - Type a message and press Enter to send. Use `Ctrl+D` to exit; `Ctrl+C` clears the current input line and prints a hint.
 
 ## Project Layout
