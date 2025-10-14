@@ -41,6 +41,7 @@ type session struct {
 	ui     *terminalUI
 
 	outboundDone chan struct{}
+	requestsDone chan struct{}
 	cleanup      sync.Once
 }
 
@@ -57,11 +58,7 @@ func newSession(room *Room, username string, channel ssh.Channel, requests <-cha
 func (s *session) run() {
 	defer s.cleanupSession()
 
-	s.client = s.room.AddClient(s.username)
-	s.writer = newSessionWriter(s.channel)
-	s.ui = newTerminalUI(s.writer)
-
-	if err := s.prepare(); err != nil {
+	if err := s.setup(); err != nil {
 		s.printSystemError(err)
 		return
 	}
@@ -71,52 +68,59 @@ func (s *session) run() {
 	}
 }
 
-func (s *session) prepare() error {
-	if err := s.initializeShell(); err != nil {
-		return fmt.Errorf("failed to start shell: %w", err)
+func (s *session) setup() error {
+	s.client = s.room.AddClient(s.username)
+	s.writer = newSessionWriter(s.channel)
+	s.ui = newTerminalUI(s.writer)
+
+	s.startRequestPump()
+
+	if err := s.ui.ClearScreen(); err != nil {
+		return fmt.Errorf("prepare terminal: %w", err)
 	}
 
 	s.startOutboundPump()
 
 	if err := s.sendGreeting(); err != nil {
-		return fmt.Errorf("failed to send greeting: %w", err)
+		return fmt.Errorf("send greeting: %w", err)
 	}
 
 	return nil
 }
 
-func (s *session) initializeShell() error {
-	if err := s.waitForShell(); err != nil {
-		return err
-	}
+// startRequestPump drains SSH channel requests and blocks until the client requests a shell.
+func (s *session) startRequestPump() {
+	s.requestsDone = make(chan struct{})
 
-	return s.ui.ClearScreen()
-}
-
-func (s *session) waitForShell() error {
-	shellReady := make(chan struct{})
+	ready := make(chan struct{})
+	var once sync.Once
+	signalReady := func() { once.Do(func() { close(ready) }) }
 
 	go func() {
-		var once sync.Once
-		signalReady := func() { once.Do(func() { close(shellReady) }) }
-
+		defer close(s.requestsDone)
 		for req := range s.requests {
-			switch req.Type {
-			case "shell":
-				req.Reply(true, nil)
+			if s.handleRequest(req) {
 				signalReady()
-			case "pty-req", "env", "window-change", "signal":
-				req.Reply(true, nil)
-			default:
-				req.Reply(false, nil)
+				continue
 			}
 		}
-
 		signalReady()
 	}()
 
-	<-shellReady
-	return nil
+	<-ready
+}
+
+func (s *session) handleRequest(req *ssh.Request) bool {
+	switch req.Type {
+	case "shell":
+		req.Reply(true, nil)
+		return true
+	case "pty-req", "env", "window-change", "signal":
+		req.Reply(true, nil)
+	default:
+		req.Reply(false, nil)
+	}
+	return false
 }
 
 func (s *session) startOutboundPump() {
@@ -151,42 +155,48 @@ func (s *session) readLoop() error {
 			return err
 		}
 
-		switch r {
-		case '\r', '\n':
-			if r == '\r' && reader.Buffered() > 0 {
-				if next, _, err := reader.ReadRune(); err == nil {
-					if next != '\n' {
-						_ = reader.UnreadRune()
-					}
-				}
-			}
-			if err := s.submitLine(); err != nil {
-				return err
-			}
-		case ctrlC:
-			if err := s.handleControl("^C"); err != nil {
-				return err
-			}
-			return errSessionTerminated
-		case ctrlD:
-			if err := s.handleControl("^D"); err != nil {
-				return err
-			}
-			return errSessionTerminated
-		case backspace, deleteChar:
-			s.buffer.TrimLast()
-			if err := s.renderPrompt(); err != nil {
-				return err
-			}
-		default:
-			if unicode.IsPrint(r) {
-				s.buffer.Append(r)
-				if err := s.renderPrompt(); err != nil {
-					return err
-				}
+		if err := s.processRune(reader, r); err != nil {
+			return err
+		}
+	}
+}
+
+// processRune handles interactive input keeping the buffer, screen, and control flow in sync.
+func (s *session) processRune(reader *bufio.Reader, r rune) error {
+	switch r {
+	case '\r', '\n':
+		return s.handleNewline(reader, r)
+	case ctrlC:
+		if err := s.handleControl("^C"); err != nil {
+			return err
+		}
+		return errSessionTerminated
+	case ctrlD:
+		if err := s.handleControl("^D"); err != nil {
+			return err
+		}
+		return errSessionTerminated
+	case backspace, deleteChar:
+		s.buffer.TrimLast()
+		return s.renderPrompt()
+	default:
+		if unicode.IsPrint(r) {
+			s.buffer.Append(r)
+			return s.renderPrompt()
+		}
+		return nil
+	}
+}
+
+func (s *session) handleNewline(reader *bufio.Reader, r rune) error {
+	if r == '\r' && reader.Buffered() > 0 {
+		if next, _, err := reader.ReadRune(); err == nil {
+			if next != '\n' {
+				_ = reader.UnreadRune()
 			}
 		}
 	}
+	return s.submitLine()
 }
 
 func (s *session) submitLine() error {
@@ -238,6 +248,9 @@ func (s *session) cleanupSession() {
 		}
 		if s.outboundDone != nil {
 			<-s.outboundDone
+		}
+		if s.requestsDone != nil {
+			<-s.requestsDone
 		}
 	})
 }
