@@ -56,11 +56,11 @@ func newSession(room *Room, username string, channel ssh.Channel, requests <-cha
 func (s *session) run() {
 	defer s.cleanupSession()
 
-	if err := s.setup(); err != nil {
-		if errors.Is(err, errShellNotRequested) {
-			return
+	err := s.setup()
+	if err != nil {
+		if !errors.Is(err, errShellNotRequested) {
+			s.printSystemError(err)
 		}
-		s.printSystemError(err)
 		return
 	}
 
@@ -70,26 +70,36 @@ func (s *session) run() {
 }
 
 func (s *session) setup() error {
+	s.initUI()
+
+	if err := s.initClient(); err != nil {
+		return err
+	}
+
+	return s.initTerminal()
+}
+
+func (s *session) initUI() {
 	s.writer = newSessionWriter(s.channel)
 	s.ui = newTerminalUI(s.writer)
+}
 
+func (s *session) initClient() error {
 	if err := s.awaitShell(); err != nil {
 		return fmt.Errorf("await shell: %w", err)
 	}
 
 	s.client = s.room.AddClient(s.username)
+	s.startOutboundRelay()
+	return nil
+}
 
+func (s *session) initTerminal() error {
 	if err := s.ui.ClearScreen(); err != nil {
 		return fmt.Errorf("prepare terminal: %w", err)
 	}
 
-	s.startOutboundRelay()
-
-	if err := s.sendGreeting(); err != nil {
-		return fmt.Errorf("send greeting: %w", err)
-	}
-
-	return nil
+	return s.sendGreeting()
 }
 
 // awaitShell drains SSH channel requests and blocks until the client requests a shell.
